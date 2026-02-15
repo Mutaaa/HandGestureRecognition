@@ -3,6 +3,7 @@ import mediapipe as mp
 from mediapipe.tasks import python
 from mediapipe.tasks.python import vision
 import os
+import time
 
 from draw import draw_landmarks_on_image
 from overlay import overlay_thumb_image, overlay_dab_image
@@ -18,6 +19,8 @@ class HandTracker:
         self.detector = self._init_detector(model_path)
         self.gesture = None
         self.prev_gesture = None
+        self.heart_hold_start = None
+        self.heart_anim_frame = 0
         if os.path.exists(THUMB_IMAGE_PATH):
             self.thumb_img = cv2.imread(THUMB_IMAGE_PATH, cv2.IMREAD_UNCHANGED)
         else:
@@ -142,6 +145,20 @@ class HandTracker:
             frame[py1:py2, px1:px2] = pendant[:, :, :3]
         return frame
 
+    def overlay_heart_animation(self, frame, cx, cy):
+        # Draw expanding pink circles
+        anim_duration = 30  # frames
+        max_radius = 180
+        for i in range(5):
+            radius = int((self.heart_anim_frame - i*5) * max_radius / anim_duration)
+            if 0 < radius < max_radius:
+                cv2.circle(frame, (cx, cy), radius, (255, 105, 180), 8)
+        self.heart_anim_frame += 1
+        if self.heart_anim_frame > anim_duration:
+            self.heart_anim_frame = 0
+            self.heart_hold_start = None  # Reset after animation
+        return frame
+
     def run(self):
         cap = cv2.VideoCapture(0)
         frame_count = 0
@@ -164,8 +181,31 @@ class HandTracker:
                     elif self.gesture == "Heart Hands":
                         frame = draw_landmarks_on_image(frame, self.detection_result, cv2)
                         frame = self.overlay_heart_effect(frame, self.detection_result.hand_landmarks)
+                        # Get heart center for animation
+                        hand1, hand2 = self.detection_result.hand_landmarks[0], self.detection_result.hand_landmarks[1]
+                        l_thumb = hand1[4]
+                        l_index = hand1[8]
+                        r_thumb = hand2[4]
+                        r_index = hand2[8]
+                        fh, fw = frame.shape[:2]
+                        pts = [
+                            (int(l_thumb.x * fw), int(l_thumb.y * fh)),
+                            (int(l_index.x * fw), int(l_index.y * fh)),
+                            (int(r_index.x * fw), int(r_index.y * fh)),
+                            (int(r_thumb.x * fw), int(r_thumb.y * fh)),
+                        ]
+                        cx = sum([p[0] for p in pts]) // 4
+                        cy = sum([p[1] for p in pts]) // 4
+                        # Heart hold timer
+                        if self.heart_hold_start is None:
+                            self.heart_hold_start = time.time()
+                            self.heart_anim_frame = 0
+                        elif time.time() - self.heart_hold_start >= 3:
+                            frame = self.overlay_heart_animation(frame, cx, cy)
                         cv2.putText(frame, f"Gesture: {self.gesture}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (255,0,255), 2)
                     else:
+                        self.heart_hold_start = None
+                        self.heart_anim_frame = 0
                         frame = draw_landmarks_on_image(frame, self.detection_result, cv2)
                         if self.gesture:
                             cv2.putText(frame, f"Gesture: {self.gesture}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0,255,0), 2)
